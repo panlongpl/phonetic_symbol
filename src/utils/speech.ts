@@ -1,4 +1,17 @@
 const audioCache = new Map<string, HTMLAudioElement>();
+let currentAudio: HTMLAudioElement | null = null;
+
+export function stopAllAudio(): void {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+  }
+  audioCache.forEach(audio => {
+    audio.pause();
+    audio.currentTime = 0;
+  });
+  currentAudio = null;
+}
 
 const PHONETIC_AUDIO_MAP: Record<string, string> = {
   "iː": "/phonetics/1.mp3",
@@ -54,21 +67,41 @@ const PHONETIC_AUDIO_MAP: Record<string, string> = {
   "w": "/phonetics/48.mp3",
 };
 
-function playUrl(url: string): void {
-  let audio = audioCache.get(url);
-  if (!audio) {
-    audio = new Audio(url);
-    audioCache.set(url, audio);
-  }
-  audio.currentTime = 0;
-  audio.play().catch(() => {});
+function playUrl(url: string): Promise<void> {
+  return new Promise((resolve) => {
+    let audio = audioCache.get(url);
+    if (!audio) {
+      audio = new Audio(url);
+      audioCache.set(url, audio);
+    }
+    currentAudio = audio;
+    audio.currentTime = 0;
+
+    const onEnded = () => {
+      audio!.removeEventListener('ended', onEnded);
+      if (currentAudio === audio) {
+        currentAudio = null;
+      }
+      resolve();
+    };
+
+    audio.addEventListener('ended', onEnded);
+    audio.play().catch(() => {
+      audio!.removeEventListener('ended', onEnded);
+      if (currentAudio === audio) {
+        currentAudio = null;
+      }
+      resolve();
+    });
+  });
 }
 
-export function speakPhonetic(symbol: string): void {
+export function speakPhonetic(symbol: string): Promise<void> {
   const url = PHONETIC_AUDIO_MAP[symbol];
   if (url) {
-    playUrl(url);
+    return playUrl(url);
   }
+  return Promise.resolve();
 }
 
 export function speakText(text: string): void {

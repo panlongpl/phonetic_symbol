@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { PhoneticSymbol } from '../data/phonetics';
 import {
   VOWELS,
   CONSONANTS,
 } from '../data/phonetics';
 import { updatePhoneticRecord } from '../data/progress';
-import { speakPhonetic, preloadVoices } from '../utils/speech';
+import { speakPhonetic, preloadVoices, stopAllAudio } from '../utils/speech';
 
 let clickTimer: number | null = null;
 let clickCount = 0;
@@ -43,10 +43,98 @@ function getPhoneticBySymbol(symbol: string): PhoneticSymbol | undefined {
 
 export default function PhoneticLearning() {
   const [selectedSymbol, setSelectedSymbol] = useState<PhoneticSymbol | null>(null);
+  const [playCount, setPlayCount] = useState(3);
+  const [intervalSec, setIntervalSec] = useState(1);
+  const [isPlayingAll, setIsPlayingAll] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const shouldPauseRef = useRef(false);
+  const pausedIndexRef = useRef(0);
+  const [currentlyPlayingSymbol, setCurrentlyPlayingSymbol] = useState<string | null>(null);
 
   useEffect(() => {
     preloadVoices();
   }, []);
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const playPhoneticMultiple = async (symbol: string, count: number, interval: number) => {
+    setCurrentlyPlayingSymbol(symbol);
+    for (let i = 0; i < count; i++) {
+      if (shouldPauseRef.current) {
+        stopAllAudio();
+        break;
+      }
+      await speakPhonetic(symbol);
+      if (shouldPauseRef.current) {
+        stopAllAudio();
+        break;
+      }
+      if (i < count - 1) {
+        await sleep(interval * 1000);
+        if (shouldPauseRef.current) {
+          stopAllAudio();
+          break;
+        }
+      }
+    }
+    setCurrentlyPlayingSymbol(null);
+  };
+
+  const getAllPhonetics = () => {
+    const all: string[] = [];
+    all.push(...MONOPHTHONGS_FRONT, ...MONOPHTHONGS_CENTRAL, ...MONOPHTHONGS_BACK);
+    all.push(...DIPHTHONGS_CLOSING, ...DIPHTHONGS_CENTRING);
+    all.push(
+      ...PLOSIVES_VOICELESS, ...PLOSIVES_VOICED,
+      ...FRICATIVES_VOICELESS, ...FRICATIVES_VOICED,
+      ...AFFRICATES_VOICELESS, ...AFFRICATES_VOICED,
+      ...NASALS, ...LATERALS, ...APPROXIMANTS
+    );
+    return all;
+  };
+
+  const playAllPhonetics = async (startIndex = 0) => {
+    if (isPlayingAll) return;
+    setIsPlayingAll(true);
+    setIsPaused(false);
+    shouldPauseRef.current = false;
+
+    const allSymbols = getAllPhonetics();
+    for (let i = startIndex; i < allSymbols.length; i++) {
+      if (shouldPauseRef.current) {
+        pausedIndexRef.current = i;
+        stopAllAudio();
+        break;
+      }
+      
+      const symbol = allSymbols[i];
+      await playPhoneticMultiple(symbol, playCount, intervalSec);
+      
+      if (shouldPauseRef.current) {
+        pausedIndexRef.current = i + 1;
+        stopAllAudio();
+        break;
+      }
+      
+      if (i < allSymbols.length - 1) {
+        await sleep(400);
+        if (shouldPauseRef.current) {
+          pausedIndexRef.current = i + 1;
+          stopAllAudio();
+          break;
+        }
+      }
+    }
+
+    if (shouldPauseRef.current) {
+      setIsPaused(true);
+    } else {
+      pausedIndexRef.current = 0;
+    }
+    setIsPlayingAll(false);
+    setCurrentlyPlayingSymbol(null);
+    shouldPauseRef.current = false;
+  };
 
   const handlePhoneticClick = (symbol: string) => {
     clickCount++;
@@ -64,6 +152,51 @@ export default function PhoneticLearning() {
       }
       clickCount = 0;
     }
+  };
+
+  const renderPhoneticCell = (s: string, color: string) => {
+    const isPlaying = currentlyPlayingSymbol === s;
+    return (
+      <td key={s} style={tdStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span
+            style={{
+              ...phoneticCellStyle,
+              color: isPlaying ? '#22c55e' : color,
+              fontSize: isPlaying ? '24px' : '18px',
+              transform: isPlaying ? 'scale(1.15)' : 'scale(1)',
+              transition: 'all 0.2s ease',
+            }}
+            onClick={() => handlePhoneticClick(s)}
+          >
+            {s}
+          </span>
+          <button
+            style={{
+              width: '24px',
+              height: '24px',
+              borderRadius: '4px',
+              border: 'none',
+              background: '#253349',
+              color: colors.primary,
+              fontSize: '12px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              playPhoneticMultiple(s, 3, 1);
+            }}
+            title="播放3次"
+          >
+            ▶
+          </button>
+        </div>
+      </td>
+    );
   };
 
   const containerStyle: React.CSSProperties = {
@@ -135,6 +268,44 @@ export default function PhoneticLearning() {
     paddingLeft: '4px',
   };
 
+  const controlPanelStyle: React.CSSProperties = {
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    alignItems: 'center',
+    gap: '12px',
+    background: colors.card,
+    padding: '12px 16px',
+    borderRadius: '12px',
+    marginBottom: '16px',
+  };
+
+  const controlLabelStyle: React.CSSProperties = {
+    fontSize: '13px',
+    color: colors.muted,
+    marginRight: '6px',
+  };
+
+  const controlInputStyle: React.CSSProperties = {
+    width: '60px',
+    padding: '6px 10px',
+    borderRadius: '6px',
+    border: '1px solid #334155',
+    background: '#0f172a',
+    color: colors.text,
+    fontSize: '14px',
+  };
+
+  const playButtonStyle: React.CSSProperties = {
+    padding: '8px 20px',
+    borderRadius: '8px',
+    background: isPlayingAll ? '#334155' : colors.primary,
+    color: '#fff',
+    fontSize: '14px',
+    fontWeight: 600,
+    cursor: isPlayingAll ? 'not-allowed' : 'pointer',
+    border: 'none',
+  };
+
   const closeDetail = () => {
     setSelectedSymbol(null);
   };
@@ -145,37 +316,83 @@ export default function PhoneticLearning() {
 
       {!selectedSymbol ? (
         <div>
+          <div style={controlPanelStyle}>
+            {isPlayingAll ? (
+              <button
+                style={{ ...playButtonStyle, background: '#ef4444', cursor: 'pointer' }}
+                onClick={() => {
+                  shouldPauseRef.current = true;
+                  stopAllAudio();
+                }}
+              >
+                ⏸ 暂停
+              </button>
+            ) : isPaused ? (
+              <>
+                <button
+                  style={{ ...playButtonStyle, background: '#10b981', cursor: 'pointer' }}
+                  onClick={() => playAllPhonetics(pausedIndexRef.current)}
+                >
+                  ▶ 继续播放
+                </button>
+                <button
+                  style={{ ...playButtonStyle, background: colors.primary, cursor: 'pointer' }}
+                  onClick={() => {
+                    pausedIndexRef.current = 0;
+                    setIsPaused(false);
+                    playAllPhonetics(0);
+                  }}
+                >
+                  ⏮ 从头播放
+                </button>
+              </>
+            ) : (
+              <button
+                style={{ ...playButtonStyle, cursor: 'pointer' }}
+                onClick={() => playAllPhonetics(0)}
+              >
+                ▶ 播放全部
+              </button>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <span style={controlLabelStyle}>每个音标播放</span>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                value={playCount}
+                onChange={(e) => setPlayCount(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
+                style={controlInputStyle}
+              />
+              <span style={controlLabelStyle}>次</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <span style={controlLabelStyle}>间隔</span>
+              <input
+                type="number"
+                min="0.5"
+                max="5"
+                step="0.5"
+                value={intervalSec}
+                onChange={(e) => setIntervalSec(Math.max(0.5, Math.min(5, parseFloat(e.target.value) || 1)))}
+                style={controlInputStyle}
+              />
+              <span style={controlLabelStyle}>秒</span>
+            </div>
+          </div>
           <div style={sectionTitleStyle}>单元音</div>
           <table style={tableStyle}>
             <tbody>
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.vowelColor, width: '90px' }}>前元音</td>
-                {MONOPHTHONGS_FRONT.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.vowelColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {MONOPHTHONGS_FRONT.map(s => renderPhoneticCell(s, colors.vowelColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
               </tr>
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.vowelColor }}>中元音</td>
-                {MONOPHTHONGS_CENTRAL.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.vowelColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {MONOPHTHONGS_CENTRAL.map(s => renderPhoneticCell(s, colors.vowelColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
@@ -183,16 +400,7 @@ export default function PhoneticLearning() {
               </tr>
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.vowelColor }}>后元音</td>
-                {MONOPHTHONGS_BACK.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.vowelColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {MONOPHTHONGS_BACK.map(s => renderPhoneticCell(s, colors.vowelColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
               </tr>
@@ -204,30 +412,12 @@ export default function PhoneticLearning() {
             <tbody>
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.vowelColor, width: '90px' }}>开合双元音</td>
-                {DIPHTHONGS_CLOSING.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.vowelColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {DIPHTHONGS_CLOSING.map(s => renderPhoneticCell(s, colors.vowelColor))}
                 <td style={tdStyle}></td>
               </tr>
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.vowelColor }}>集中双元音</td>
-                {DIPHTHONGS_CENTRING.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.vowelColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {DIPHTHONGS_CENTRING.map(s => renderPhoneticCell(s, colors.vowelColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
@@ -242,16 +432,7 @@ export default function PhoneticLearning() {
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.consonantColor, width: '90px' }} rowSpan={2}>爆破音</td>
                 <td style={thStyle}>清辅音</td>
-                {PLOSIVES_VOICELESS.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.consonantColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {PLOSIVES_VOICELESS.map(s => renderPhoneticCell(s, colors.consonantColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
@@ -259,16 +440,7 @@ export default function PhoneticLearning() {
               </tr>
               <tr>
                 <td style={thStyle}>浊辅音</td>
-                {PLOSIVES_VOICED.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.consonantColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {PLOSIVES_VOICED.map(s => renderPhoneticCell(s, colors.consonantColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
@@ -277,47 +449,20 @@ export default function PhoneticLearning() {
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.consonantColor }} rowSpan={2}>摩擦音</td>
                 <td style={thStyle}>清辅音</td>
-                {FRICATIVES_VOICELESS.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.consonantColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {FRICATIVES_VOICELESS.map(s => renderPhoneticCell(s, colors.consonantColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
               </tr>
               <tr>
                 <td style={thStyle}>浊辅音</td>
-                {FRICATIVES_VOICED.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.consonantColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {FRICATIVES_VOICED.map(s => renderPhoneticCell(s, colors.consonantColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
               </tr>
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.consonantColor }} rowSpan={2}>破擦音</td>
                 <td style={thStyle}>清辅音</td>
-                {AFFRICATES_VOICELESS.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.consonantColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {AFFRICATES_VOICELESS.map(s => renderPhoneticCell(s, colors.consonantColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
@@ -325,16 +470,7 @@ export default function PhoneticLearning() {
               </tr>
               <tr>
                 <td style={thStyle}>浊辅音</td>
-                {AFFRICATES_VOICED.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.consonantColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {AFFRICATES_VOICED.map(s => renderPhoneticCell(s, colors.consonantColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
@@ -343,16 +479,7 @@ export default function PhoneticLearning() {
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.consonantColor }}>鼻音</td>
                 <td style={thStyle}>浊辅音</td>
-                {NASALS.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.consonantColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {NASALS.map(s => renderPhoneticCell(s, colors.consonantColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
@@ -361,16 +488,7 @@ export default function PhoneticLearning() {
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.consonantColor }}>舌则音</td>
                 <td style={thStyle}>浊辅音</td>
-                {LATERALS.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.consonantColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {LATERALS.map(s => renderPhoneticCell(s, colors.consonantColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
@@ -381,16 +499,7 @@ export default function PhoneticLearning() {
               <tr>
                 <td style={{ ...categoryHeaderStyle, color: colors.consonantColor }}>半元音</td>
                 <td style={thStyle}>浊辅音</td>
-                {APPROXIMANTS.map(s => (
-                  <td key={s} style={tdStyle}>
-                    <span
-                      style={{ ...phoneticCellStyle, color: colors.consonantColor }}
-                      onClick={() => handlePhoneticClick(s)}
-                    >
-                      {s}
-                    </span>
-                  </td>
-                ))}
+                {APPROXIMANTS.map(s => renderPhoneticCell(s, colors.consonantColor))}
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
